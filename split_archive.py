@@ -19,7 +19,7 @@ if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
 
 # ── 설정 ──────────────────────────────────────────────────────────────────────
 EXE_NAME    = "OraclePlanAnalyzer.exe"
-CHUNK_MB    = 9
+CHUNK_MB    = 5
 CHUNK_BYTES = CHUNK_MB * 1024 * 1024
 BASE_DIR    = Path(__file__).parent
 DIST_DIR    = BASE_DIR / "dist"
