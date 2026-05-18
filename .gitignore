@@ -14,10 +14,11 @@ build/
 build/
 dist/
 
-# 환경 설정 (DB 접속 정보 포함 가능 파일은 제외)
+# 환경 설정 (DB 접속 정보 / 메일 인증 정보 포함 파일은 제외)
 *.env
 .env.*
 config.local.*
+mail_config.json
 
 # IDE
 .vscode/

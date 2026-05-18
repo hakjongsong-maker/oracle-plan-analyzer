@@ -162,6 +162,13 @@ def main():
     for f in sorted(RELEASE_DIR.iterdir()):
         print(f"  {f.name}")
 
+    # 메일 발송
+    print("\n" + "=" * 50)
+    print(" 분할 파일 메일 발송 시작")
+    print("=" * 50)
+    from mail_sender import send_parts
+    send_parts(parts)
+
 
 if __name__ == "__main__":
     main()
