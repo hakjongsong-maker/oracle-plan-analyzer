@@ -81,6 +81,47 @@ OraclePlanAnalyzer 분할 배포 파일입니다.
     return msg
 
 
+def _connect_smtp(cfg: dict):
+    """
+    STARTTLS(587) → SSL(465) 순서로 연결을 시도합니다.
+    성공하면 로그인된 smtplib 서버 객체를 반환, 실패하면 None 반환.
+    """
+    attempts = [
+        ("STARTTLS", cfg["smtp_server"], cfg.get("smtp_port", 587)),
+        ("SSL",      cfg["smtp_server"], 465),
+    ]
+
+    for method, host, port in attempts:
+        try:
+            print(f"  접속 시도: {host}:{port} ({method}) ...", end=" ", flush=True)
+            if method == "STARTTLS":
+                server = smtplib.SMTP(host, port, timeout=15)
+                server.ehlo()
+                server.starttls()
+            else:
+                server = smtplib.SMTP_SSL(host, port, timeout=15)
+                server.ehlo()
+
+            server.login(cfg["sender_email"], cfg["app_password"])
+            print("로그인 성공")
+            return server
+
+        except smtplib.SMTPAuthenticationError:
+            print("실패")
+            print("\n[오류] Gmail 인증 실패 — 앱 비밀번호를 확인하세요.")
+            print("  설정: https://myaccount.google.com/apppasswords")
+            print("  mail_config.json 의 app_password 항목을 16자리 앱 비밀번호로 변경하세요.")
+            return None
+
+        except Exception as e:
+            print(f"실패 ({e})")
+            continue   # 다음 방법 시도
+
+    print("\n[오류] SMTP 연결 실패 — 모든 포트(587, 465)가 차단되어 있습니다.")
+    print("  네트워크 방화벽 또는 VPN 설정을 확인하세요.")
+    return None
+
+
 def send_parts(part_files: list[Path], delay_sec: int = 3) -> bool:
     """
     각 파트 파일을 개별 메일로 순차 발송.
@@ -94,19 +135,8 @@ def send_parts(part_files: list[Path], delay_sec: int = 3) -> bool:
     print(f"  SMTP     : {cfg['smtp_server']}:{cfg['smtp_port']}")
     print(f"  발송 건수: {total}개 메일\n")
 
-    try:
-        server = smtplib.SMTP(cfg["smtp_server"], cfg["smtp_port"], timeout=30)
-        server.ehlo()
-        server.starttls()
-        server.login(cfg["sender_email"], cfg["app_password"])
-        print("  SMTP 로그인 성공\n")
-    except smtplib.SMTPAuthenticationError:
-        print("[오류] Gmail 인증 실패")
-        print("  mail_config.json 의 app_password 를 확인하세요.")
-        print("  앱 비밀번호 생성: https://myaccount.google.com/apppasswords")
-        return False
-    except Exception as e:
-        print(f"[오류] SMTP 연결 실패: {e}")
+    server = _connect_smtp(cfg)
+    if server is None:
         return False
 
     success_count = 0
