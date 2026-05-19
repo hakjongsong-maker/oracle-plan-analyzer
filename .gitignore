@@ -11,10 +11,9 @@ build/
 # PyInstaller
 *.spec.bak
 build/
-# dist/ 전체는 제외하되 exe 및 release/ 배포 파일은 포함
+# dist/ 전체는 제외하되 exe 파일은 포함
 dist/*
 !dist/*.exe
-!dist/release/
 
 # 환경 설정 (DB 접속 정보 / 메일 인증 정보 포함 파일은 제외)
 *.env
