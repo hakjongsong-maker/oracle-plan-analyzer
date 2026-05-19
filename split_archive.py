@@ -19,14 +19,15 @@ if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 
 # ── 설정 ──────────────────────────────────────────────────────────────────────
-EXE_NAME    = "OraclePlanAnalyzer.exe"
-ZIP_PASSWORD = b"0000"            # 압축 파일 암호
-CHUNK_MB    = 5
-CHUNK_BYTES = CHUNK_MB * 1024 * 1024
-BASE_DIR    = Path(__file__).parent
-DIST_DIR    = BASE_DIR / "dist"
-RELEASE_DIR = DIST_DIR / "release"
-EXE_PATH    = DIST_DIR / EXE_NAME
+EXE_NAME     = "OraclePlanAnalyzer.exe"
+TXT_NAME     = "OraclePlanAnalyzer.txt"   # 압축 내부 파일명 (.exe → .txt)
+ZIP_PASSWORD = b"0000"                     # 압축 파일 암호
+CHUNK_MB     = 5
+CHUNK_BYTES  = CHUNK_MB * 1024 * 1024
+BASE_DIR     = Path(__file__).parent
+DIST_DIR     = BASE_DIR / "dist"
+RELEASE_DIR  = DIST_DIR / "release"
+EXE_PATH     = DIST_DIR / EXE_NAME
 
 
 def md5_of_file(path: Path) -> str:
@@ -38,14 +39,16 @@ def md5_of_file(path: Path) -> str:
 
 
 def make_zip(exe_path: Path, zip_path: Path):
-    print(f"  압축 중: {exe_path.name} → {zip_path.name}  (암호: {ZIP_PASSWORD.decode()})")
+    print(f"  압축 중: {exe_path.name} → {TXT_NAME} (확장자 .txt 변환)")
+    print(f"           → {zip_path.name}  (암호: {ZIP_PASSWORD.decode()})")
     with pyzipper.AESZipFile(
         zip_path, "w",
         compression=pyzipper.ZIP_DEFLATED,
         encryption=pyzipper.WZ_AES,
     ) as zf:
         zf.setpassword(ZIP_PASSWORD)
-        zf.write(exe_path, exe_path.name)
+        # exe 파일을 .txt 이름으로 저장
+        zf.write(exe_path, TXT_NAME)
     size_mb = zip_path.stat().st_size / 1024 / 1024
     print(f"  압축 완료: {size_mb:.1f} MB")
     return zip_path
@@ -79,6 +82,7 @@ def make_combine_bat(parts: list[Path], out_dir: Path, zip_name: str):
         "echo  OraclePlanAnalyzer 분할 파일 재조합\n"
         "echo =============================================\n"
         "echo.\n"
+        "echo [1/3] 분할 파일 재조합 중...\n"
         f"copy /b {part_names} {zip_name}\n"
         "if errorlevel 1 (\n"
         "    echo [오류] 파일 재조합 실패\n"
@@ -87,7 +91,12 @@ def make_combine_bat(parts: list[Path], out_dir: Path, zip_name: str):
         ")\n"
         "echo.\n"
         f"echo [완료] {zip_name} 생성됨\n"
-        f"echo 압축을 해제하면 {EXE_NAME} 를 사용할 수 있습니다.\n"
+        "echo.\n"
+        f"echo [2/3] {zip_name} 압축을 해제하세요.\n"
+        f"echo       암호: {ZIP_PASSWORD.decode()}\n"
+        "echo.\n"
+        f"echo [3/3] 압축 해제 후 {TXT_NAME} 파일의 확장자를 .txt -> .exe 로 변경하세요.\n"
+        f"echo       변경 방법: {TXT_NAME} 파일 선택 -> F2 -> OraclePlanAnalyzer.exe 로 변경\n"
         "echo.\n"
         "pause\n"
     )
@@ -107,12 +116,15 @@ def make_readme(parts: list[Path], zip_name: str, exe_md5: str, out_dir: Path):
         f"분할 개수  : {len(parts)}개",
         "",
         f"압축 암호   : {ZIP_PASSWORD.decode()}",
+        f"내부 파일명 : {TXT_NAME}  (압축 해제 후 .exe 로 변경 필요)",
         "",
         "[ 사용 방법 ]",
         "1. 이 폴더의 모든 파일을 같은 경로에 복사합니다.",
         "2. combine.bat 을 실행하면 zip 파일이 생성됩니다.",
         f"3. {zip_name} 압축 해제 시 암호 '{ZIP_PASSWORD.decode()}' 를 입력합니다.",
-        f"4. {EXE_NAME} 를 실행합니다.",
+        f"4. 압축 해제된 {TXT_NAME} 파일명을 {EXE_NAME} 으로 변경합니다.",
+        f"   (파일 선택 후 F2 키 -> 확장자 .txt 를 .exe 로 수정)",
+        f"5. {EXE_NAME} 를 실행합니다.",
         "   (Python / Oracle Instant Client 설치 불필요)",
         "",
         "[ 분할 파일 목록 ]",
