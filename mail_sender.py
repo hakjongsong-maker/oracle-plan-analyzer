@@ -1,11 +1,15 @@
 """
 분할 압축 파일을 SMTP 로 개별 메일 발송합니다.
+사내 HTTP 프록시 환경에서는 CONNECT 터널링을 통해 연결합니다.
 설정: mail_config.json
 """
 import json
 import smtplib
+import socket
+import ssl
 import sys
 import time
+import urllib.parse
 from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
 from email.mime.text import MIMEText
@@ -43,6 +47,115 @@ def load_config() -> dict:
     return cfg
 
 
+# ── HTTP CONNECT 프록시 터널 소켓 ─────────────────────────────────────────────
+def _proxy_socket(proxy_url: str, target_host: str, target_port: int,
+                  timeout: int = 15) -> socket.socket:
+    """HTTP 프록시 CONNECT 메서드로 target 에 TCP 터널 소켓을 생성합니다."""
+    parsed     = urllib.parse.urlparse(proxy_url)
+    proxy_host = parsed.hostname
+    proxy_port = parsed.port or 8080
+
+    sock = socket.create_connection((proxy_host, proxy_port), timeout=timeout)
+    sock.settimeout(timeout)
+
+    connect_req = (
+        f"CONNECT {target_host}:{target_port} HTTP/1.1\r\n"
+        f"Host: {target_host}:{target_port}\r\n"
+        f"\r\n"
+    )
+    sock.sendall(connect_req.encode())
+
+    # 프록시 응답 수신 (헤더 끝까지)
+    response = b""
+    while b"\r\n\r\n" not in response:
+        chunk = sock.recv(4096)
+        if not chunk:
+            raise ConnectionError("프록시 응답이 없습니다.")
+        response += chunk
+
+    first_line = response.split(b"\r\n")[0].decode(errors="replace")
+    if "200" not in first_line:
+        raise ConnectionError(f"프록시 CONNECT 거부: {first_line}")
+
+    return sock
+
+
+# ── 프록시용 SMTP 서브클래스 (_get_socket 오버라이드) ─────────────────────────
+class _ProxySMTP(smtplib.SMTP):
+    """STARTTLS SMTP — HTTP CONNECT 프록시 터널 경유."""
+    def __init__(self, proxy_url: str, host: str, port: int, timeout: int = 15):
+        self._proxy_url = proxy_url
+        super().__init__(host, port, timeout=timeout)
+
+    def _get_socket(self, host, port, timeout):
+        return _proxy_socket(self._proxy_url, host, port, timeout)
+
+
+class _ProxySMTP_SSL(smtplib.SMTP_SSL):
+    """SSL SMTP — HTTP CONNECT 프록시 터널 경유."""
+    def __init__(self, proxy_url: str, host: str, port: int, timeout: int = 15):
+        self._proxy_url = proxy_url
+        super().__init__(host, port, timeout=timeout)
+
+    def _get_socket(self, host, port, timeout):
+        raw_sock = _proxy_socket(self._proxy_url, host, port, timeout)
+        ssl_ctx  = ssl.create_default_context()
+        return ssl_ctx.wrap_socket(raw_sock, server_hostname=host)
+
+
+# ── SMTP 연결 (직접 / 프록시 자동 선택) ──────────────────────────────────────
+def _connect_smtp(cfg: dict):
+    """
+    프록시 설정이 있으면 HTTP CONNECT 터널로,
+    없으면 직접 연결로 SMTP 서버에 접속합니다.
+    STARTTLS(587) → SSL(465) 순서로 시도합니다.
+    """
+    proxy_url = cfg.get("proxy", "").strip()
+    smtp_host = cfg["smtp_server"]
+    use_proxy = bool(proxy_url)
+
+    attempts = [
+        ("STARTTLS", smtp_host, cfg.get("smtp_port", 587)),
+        ("SSL",      smtp_host, 465),
+    ]
+
+    if use_proxy:
+        parsed = urllib.parse.urlparse(proxy_url)
+        print(f"  프록시 경유: {parsed.hostname}:{parsed.port or 8080}")
+
+    for method, host, port in attempts:
+        try:
+            print(f"  접속 시도: {host}:{port} ({method}) ...", end=" ", flush=True)
+
+            if method == "STARTTLS":
+                server = _ProxySMTP(proxy_url, host, port) if use_proxy \
+                         else smtplib.SMTP(host, port, timeout=15)
+                server.ehlo()
+                server.starttls()
+                server.ehlo()
+            else:
+                server = _ProxySMTP_SSL(proxy_url, host, port) if use_proxy \
+                         else smtplib.SMTP_SSL(host, port, timeout=15)
+                server.ehlo()
+
+            server.login(cfg["sender_email"], cfg["app_password"])
+            print("로그인 성공")
+            return server
+
+        except smtplib.SMTPAuthenticationError:
+            print("실패")
+            print("\n[오류] Gmail 인증 실패 — 앱 비밀번호를 확인하세요.")
+            print("  설정: https://myaccount.google.com/apppasswords")
+            return None
+
+        except Exception as e:
+            print(f"실패 ({e})")
+            continue
+
+    print("\n[오류] SMTP 연결 실패 — 모든 방법이 실패했습니다.")
+    return None
+
+
 # ── 메일 메시지 생성 ──────────────────────────────────────────────────────────
 def _build_message(cfg: dict, part_path: Path, part_num: int, total_parts: int) -> MIMEMultipart:
     msg            = MIMEMultipart()
@@ -51,7 +164,6 @@ def _build_message(cfg: dict, part_path: Path, part_num: int, total_parts: int) 
     msg["Subject"] = (
         f"[OraclePlanAnalyzer] 배포 파일 {part_num}/{total_parts} - {part_path.name}"
     )
-
     size_mb = part_path.stat().st_size / 1024 / 1024
     body = (
         f"OraclePlanAnalyzer 분할 배포 파일입니다.\n\n"
@@ -78,47 +190,6 @@ def _build_message(cfg: dict, part_path: Path, part_num: int, total_parts: int) 
     return msg
 
 
-# ── SMTP 연결 (STARTTLS → SSL 자동 전환) ─────────────────────────────────────
-def _connect_smtp(cfg: dict):
-    """
-    STARTTLS(587) → SSL(465) 순서로 연결을 시도합니다.
-    성공 시 로그인된 서버 객체 반환, 실패 시 None 반환.
-    """
-    attempts = [
-        ("STARTTLS", cfg["smtp_server"], cfg.get("smtp_port", 587)),
-        ("SSL",      cfg["smtp_server"], 465),
-    ]
-
-    for method, host, port in attempts:
-        try:
-            print(f"  접속 시도: {host}:{port} ({method}) ...", end=" ", flush=True)
-            if method == "STARTTLS":
-                server = smtplib.SMTP(host, port, timeout=15)
-                server.ehlo()
-                server.starttls()
-            else:
-                server = smtplib.SMTP_SSL(host, port, timeout=15)
-                server.ehlo()
-
-            server.login(cfg["sender_email"], cfg["app_password"])
-            print("로그인 성공")
-            return server
-
-        except smtplib.SMTPAuthenticationError:
-            print("실패")
-            print("\n[오류] Gmail 인증 실패 — 앱 비밀번호를 확인하세요.")
-            print("  설정: https://myaccount.google.com/apppasswords")
-            return None
-
-        except Exception as e:
-            print(f"실패 ({e})")
-            continue
-
-    print("\n[오류] SMTP 연결 실패 — 포트 587, 465 모두 차단되어 있습니다.")
-    print("  네트워크 방화벽 또는 VPN 설정을 확인하세요.")
-    return None
-
-
 # ── 공개 진입점 ───────────────────────────────────────────────────────────────
 def send_parts(part_files: list[Path], delay_sec: int = 3) -> bool:
     """각 파트 파일을 개별 SMTP 메일로 순차 발송."""
@@ -143,7 +214,7 @@ def send_parts(part_files: list[Path], delay_sec: int = 3) -> bool:
             print(f"  [{i}/{total}] 발송 완료: {part_path.name} ({size_mb:.1f} MB)")
             success_count += 1
             if i < total:
-                time.sleep(delay_sec)   # Gmail 연속 전송 제한 방지
+                time.sleep(delay_sec)
         except Exception as e:
             print(f"  [{i}/{total}] 발송 실패: {part_path.name} - {e}")
 
