@@ -1,8 +1,10 @@
 """Oracle DB connection manager — up to 6 connections."""
 from __future__ import annotations
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional, Dict
+
+from app_logger import log
 
 try:
     import oracledb
@@ -40,30 +42,53 @@ class DBManager:
 
     def connect(self, db_id: int) -> None:
         if not ORACLEDB_AVAILABLE:
-            raise ConnectionError("oracledb 패키지가 설치되지 않았습니다.\npip install oracledb 를 실행하세요.")
+            raise ConnectionError(
+                "oracledb 패키지가 설치되지 않았습니다.\n"
+                "pip install oracledb 를 실행하세요."
+            )
 
         cfg = self._configs.get(db_id)
         if not cfg:
             raise ConnectionError("DB 설정이 없습니다.")
-        if not cfg.tns_alias:
+
+        # ── 입력값 검증 ───────────────────────────────────────────────────────
+        if not cfg.tns_alias.strip():
             raise ConnectionError("TNS Alias를 선택하세요.")
-        if not cfg.username:
+        if not cfg.username.strip():
             raise ConnectionError("사용자명을 입력하세요.")
 
-        tns_dir = os.path.dirname(cfg.tns_file) if cfg.tns_file else None
+        # ── tnsnames.ora 경로 검증 ────────────────────────────────────────────
+        # DPY-4018 방지: config_dir 없이 alias만 넘기면 EZConnect 파싱 시도 → 오류
+        tns_file = cfg.tns_file.strip()
+        if not tns_file:
+            raise ConnectionError(
+                "tnsnames.ora 파일이 설정되지 않았습니다.\n"
+                "상단의 [tnsnames.ora (공통)] 에서 파일을 먼저 선택하세요."
+            )
+        if not os.path.isfile(tns_file):
+            raise ConnectionError(
+                f"tnsnames.ora 파일을 찾을 수 없습니다.\n경로: {tns_file}"
+            )
+
+        config_dir = os.path.dirname(os.path.abspath(tns_file))
+
+        log.info(
+            "[DB%d] 접속 시도 — alias=%s, user=%s, config_dir=%s",
+            db_id + 1, cfg.tns_alias, cfg.username, config_dir,
+        )
 
         try:
-            conn_kwargs = dict(
+            conn = oracledb.connect(
                 user=cfg.username,
                 password=cfg.password,
-                dsn=cfg.tns_alias,
+                dsn=cfg.tns_alias.strip(),
+                config_dir=config_dir,
             )
-            if tns_dir:
-                conn_kwargs["config_dir"] = tns_dir
-
-            conn = oracledb.connect(**conn_kwargs)
             self._connections[db_id] = conn
+            log.info("[DB%d] 접속 성공", db_id + 1)
+
         except Exception as e:
+            log.error("[DB%d] 접속 실패: %s", db_id + 1, e)
             raise ConnectionError(str(e)) from e
 
     def disconnect(self, db_id: int):
@@ -71,8 +96,9 @@ class DBManager:
         if conn:
             try:
                 conn.close()
-            except Exception:
-                pass
+                log.info("[DB%d] 접속 종료", db_id + 1)
+            except Exception as e:
+                log.warning("[DB%d] 접속 종료 중 오류: %s", db_id + 1, e)
 
     def is_connected(self, db_id: int) -> bool:
         conn = self._connections.get(db_id)

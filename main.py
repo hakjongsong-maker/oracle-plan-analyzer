@@ -3,10 +3,12 @@ from __future__ import annotations
 import os
 import sys
 import threading
+import traceback
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, font as tkfont
 from typing import List, Optional, Dict
 
+from app_logger import log
 from db_manager import DBManager, DBConfig
 from plan_analyzer import explain_plan, PlanResult
 from tuning_advisor import analyze_plans
@@ -146,6 +148,7 @@ class DBCard(tk.LabelFrame):
                 self.after(0, lambda: self._set_status("connected"))
                 self.after(0, lambda: self.on_status_change(self.db_id, True, None))
             except Exception as e:
+                log.error("DB%d 접속 오류: %s", self.db_id + 1, e, exc_info=True)
                 self.after(0, lambda err=e: self._set_status("error", str(err)))
                 self.after(0, lambda err=e: self.on_status_change(self.db_id, False, str(err)))
 
@@ -433,6 +436,7 @@ class App(tk.Tk):
 
         def _do():
             results = []
+            log.info("실행계획 조회 시작 — 접속 DB: %s", connected_ids)
             for db_id in connected_ids:
                 conn = self._manager.get_connection(db_id)
                 label = self._cards[db_id].get_label()
@@ -440,6 +444,10 @@ class App(tk.Tk):
                 if cfg:
                     label = cfg.label or label
                 result = explain_plan(conn, sql, db_id, label)
+                if result.error:
+                    log.error("DB%d 실행계획 오류: %s", db_id + 1, result.error)
+                else:
+                    log.info("DB%d 실행계획 완료 — hash=%s", db_id + 1, result.plan_hash)
                 results.append(result)
             self.after(0, lambda: self._show_results(results))
 
@@ -582,7 +590,24 @@ class App(tk.Tk):
 
 
 # ── Entry point ────────────────────────────────────────────────────────────────
+def _global_exception_handler(exc_type, exc_value, exc_tb):
+    """잡히지 않은 예외를 로그 파일에 기록하고 사용자에게 알림."""
+    msg = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+    log.critical("처리되지 않은 예외 발생:\n%s", msg)
+    try:
+        messagebox.showerror(
+            "예기치 않은 오류",
+            f"오류가 발생했습니다. 로그 파일을 확인하세요.\n\n"
+            f"{exc_type.__name__}: {exc_value}"
+        )
+    except Exception:
+        pass
+
+
 if __name__ == "__main__":
+    # 전역 예외 핸들러 등록
+    sys.excepthook = _global_exception_handler
+
     # Check dependencies
     try:
         import oracledb  # noqa: F401
@@ -598,5 +623,7 @@ if __name__ == "__main__":
         )
         sys.exit(1)
 
+    log.info("애플리케이션 초기화 완료")
     app = App()
     app.mainloop()
+    log.info("애플리케이션 종료")
