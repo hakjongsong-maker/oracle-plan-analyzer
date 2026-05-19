@@ -226,7 +226,11 @@ def send_parts(part_files: list[Path], delay_sec: int = 3) -> bool:
 # ── 단독 실행 ─────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     release_dir = Path(__file__).parent / "dist" / "release"
-    parts       = sorted(release_dir.glob("*_part*.zip"))
+    # WinZip 분할 형식: .z01, .z02, ..., .zip (last part)
+    parts = sorted(
+        [p for p in release_dir.iterdir()
+         if p.suffix == ".zip" or (len(p.suffix) >= 3 and p.suffix[1] == "z" and p.suffix[2:].isdigit())]
+    )
 
     if not parts:
         print(f"[오류] 분할 파일이 없습니다: {release_dir}")

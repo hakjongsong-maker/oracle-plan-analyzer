@@ -54,17 +54,31 @@ def make_zip(exe_path: Path, zip_path: Path):
     return zip_path
 
 
-def split_file(src: Path, out_dir: Path, chunk_bytes: int) -> list[Path]:
-    total   = src.stat().st_size
-    n_parts = math.ceil(total / chunk_bytes)
-    parts   = []
+def _part_ext(part_num: int, total_parts: int) -> str:
+    """
+    WinZip 분할 ZIP 표준 확장자:
+      마지막 파트 → .zip  (central directory 포함)
+      그 외 파트  → .z01, .z02, ...
+    """
+    if part_num == total_parts:
+        return ".zip"
+    return f".z{part_num:02d}"
+
+
+def split_file(src: Path, out_dir: Path, chunk_bytes: int,
+               out_stem: str | None = None) -> list[Path]:
+    total    = src.stat().st_size
+    n_parts  = math.ceil(total / chunk_bytes)
+    parts    = []
+    stem     = out_stem if out_stem else src.stem   # e.g. "OraclePlanAnalyzer"
 
     print(f"\n  분할: {src.name} ({total/1024/1024:.1f} MB) → {n_parts}개 파트")
 
     with open(src, "rb") as f:
         for i in range(n_parts):
             data      = f.read(chunk_bytes)
-            part_name = f"{src.stem}_part{i+1:02d}.zip"
+            ext       = _part_ext(i + 1, n_parts)
+            part_name = f"{stem}{ext}"          # e.g. OraclePlanAnalyzer.z01
             part_path = out_dir / part_name
             with open(part_path, "wb") as pf:
                 pf.write(data)
@@ -75,37 +89,61 @@ def split_file(src: Path, out_dir: Path, chunk_bytes: int) -> list[Path]:
 
 
 def make_combine_bat(parts: list[Path], out_dir: Path, zip_name: str):
-    part_names = " + ".join(p.name for p in parts)
+    """
+    WinZip 분할 ZIP 형식 (.z01/.z02/.zip) 은 copy /b 재조합이 불필요합니다.
+    7-Zip 이 설치된 경우 자동 압축 해제, 없으면 수동 안내를 출력합니다.
+    """
+    last_part = parts[-1].name   # 마지막 파트 = .zip (central directory)
     script = (
         "@echo off\n"
+        "chcp 65001 > nul\n"
         "echo =============================================\n"
-        "echo  OraclePlanAnalyzer 분할 파일 재조합\n"
+        "echo  OraclePlanAnalyzer 분할 파일 압축 해제\n"
         "echo =============================================\n"
         "echo.\n"
-        "echo [1/3] 분할 파일 재조합 중...\n"
-        f"copy /b {part_names} {zip_name}\n"
+        "echo [안내] 이 파일들은 WinZip 분할 ZIP 형식입니다.\n"
+        f"echo        (.z01, .z02, ... , .zip) 모두 같은 폴더에 있어야 합니다.\n"
+        "echo.\n"
+        "\n"
+        ":: 7-Zip 자동 탐색\n"
+        'set SEVENZIP=""\n'
+        'if exist "C:\\Program Files\\7-Zip\\7z.exe"   set SEVENZIP="C:\\Program Files\\7-Zip\\7z.exe"\n'
+        'if exist "C:\\Program Files (x86)\\7-Zip\\7z.exe" set SEVENZIP="C:\\Program Files (x86)\\7-Zip\\7z.exe"\n'
+        "\n"
+        'if %SEVENZIP%=="" goto manual\n'
+        "\n"
+        ":: 7-Zip 자동 압축 해제\n"
+        "echo [1/2] 7-Zip 으로 압축 해제 중...\n"
+        f'%SEVENZIP% x "{last_part}" -p{ZIP_PASSWORD.decode()} -y\n'
         "if errorlevel 1 (\n"
-        "    echo [오류] 파일 재조합 실패\n"
+        "    echo [오류] 압축 해제 실패\n"
         "    pause\n"
         "    exit /b 1\n"
         ")\n"
         "echo.\n"
-        f"echo [완료] {zip_name} 생성됨\n"
+        f"echo [2/2] {TXT_NAME} 파일 확장자를 .exe 로 변경하세요.\n"
+        f"echo       방법: {TXT_NAME} 선택 후 F2 -> OraclePlanAnalyzer.exe 로 변경\n"
         "echo.\n"
-        f"echo [2/3] {zip_name} 압축을 해제하세요.\n"
-        f"echo       암호: {ZIP_PASSWORD.decode()}\n"
+        "pause\n"
+        "exit /b 0\n"
+        "\n"
+        ":manual\n"
+        "echo [수동 안내] 7-Zip 이 설치되어 있지 않습니다.\n"
         "echo.\n"
-        f"echo [3/3] 압축 해제 후 {TXT_NAME} 파일의 확장자를 .txt -> .exe 로 변경하세요.\n"
-        f"echo       변경 방법: {TXT_NAME} 파일 선택 -> F2 -> OraclePlanAnalyzer.exe 로 변경\n"
+        f"echo  1. 7-Zip(https://www.7-zip.org) 또는 WinRAR 을 설치합니다.\n"
+        f"echo  2. '{last_part}' 파일을 우클릭 -> '여기에 압축 풀기'\n"
+        f"echo     (암호: {ZIP_PASSWORD.decode()})\n"
+        f"echo  3. 압축 해제된 '{TXT_NAME}' 파일명을 '{EXE_NAME}' 으로 변경합니다.\n"
         "echo.\n"
         "pause\n"
     )
     bat_path = out_dir / "combine.bat"
-    bat_path.write_text(script, encoding="utf-8")
+    bat_path.write_text(script, encoding="utf-8-sig")   # BOM: 한글 깨짐 방지
     print(f"\n  재조합 스크립트: {bat_path.name}")
 
 
 def make_readme(parts: list[Path], zip_name: str, exe_md5: str, out_dir: Path):
+    last_part = parts[-1].name   # e.g. OraclePlanAnalyzer.zip
     lines = [
         "OraclePlanAnalyzer 배포 패키지",
         "=" * 40,
@@ -114,15 +152,20 @@ def make_readme(parts: list[Path], zip_name: str, exe_md5: str, out_dir: Path):
         f"MD5 (exe)  : {exe_md5}",
         f"분할 크기  : {CHUNK_MB} MB",
         f"분할 개수  : {len(parts)}개",
+        f"압축 형식  : WinZip 분할 ZIP (.z01 / .z02 / ... / .zip)",
         "",
         f"압축 암호   : {ZIP_PASSWORD.decode()}",
         f"내부 파일명 : {TXT_NAME}  (압축 해제 후 .exe 로 변경 필요)",
         "",
         "[ 사용 방법 ]",
-        "1. 이 폴더의 모든 파일을 같은 경로에 복사합니다.",
-        "2. combine.bat 을 실행하면 zip 파일이 생성됩니다.",
-        f"3. {zip_name} 압축 해제 시 암호 '{ZIP_PASSWORD.decode()}' 를 입력합니다.",
-        f"4. 압축 해제된 {TXT_NAME} 파일명을 {EXE_NAME} 으로 변경합니다.",
+        "1. 이 폴더의 모든 파일(.z01, .z02, ... , .zip, combine.bat)을",
+        "   같은 폴더에 복사합니다.",
+        "2. combine.bat 을 실행합니다.",
+        "   - 7-Zip 설치 시: 자동으로 압축 해제됩니다.",
+        "   - 7-Zip 미설치 시: 수동 안내 메시지가 출력됩니다.",
+        "     (7-Zip: https://www.7-zip.org  또는 WinRAR 사용)",
+        f"3. 압축 해제 시 암호 '{ZIP_PASSWORD.decode()}' 를 입력합니다.",
+        f"4. 압축 해제된 '{TXT_NAME}' 파일명을 '{EXE_NAME}' 으로 변경합니다.",
         f"   (파일 선택 후 F2 키 -> 확장자 .txt 를 .exe 로 수정)",
         f"5. {EXE_NAME} 를 실행합니다.",
         "   (Python / Oracle Instant Client 설치 불필요)",
@@ -158,15 +201,16 @@ def main():
     exe_md5 = md5_of_file(EXE_PATH)
     print(f"\n  {EXE_NAME}  MD5: {exe_md5}")
 
-    # zip 압축
+    # zip 압축 (임시 이름으로 생성 — 분할 마지막 파트와 이름 충돌 방지)
     zip_name = EXE_NAME.replace(".exe", ".zip")
-    tmp_zip  = RELEASE_DIR / zip_name
+    tmp_zip  = RELEASE_DIR / ("_tmp_" + zip_name)
     make_zip(EXE_PATH, tmp_zip)
 
-    # 10MB 분할
-    parts = split_file(tmp_zip, RELEASE_DIR, CHUNK_BYTES)
+    # 분할 (.z01, .z02, ..., .zip)  — 출력 파일명은 _tmp_ 없는 원래 stem 사용
+    out_stem = EXE_NAME.replace(".exe", "")   # "OraclePlanAnalyzer"
+    parts = split_file(tmp_zip, RELEASE_DIR, CHUNK_BYTES, out_stem=out_stem)
 
-    # 원본 zip 삭제 (분할 파트만 남김)
+    # 임시 원본 zip 삭제 (분할 파트만 남김)
     tmp_zip.unlink()
 
     # combine.bat 생성
