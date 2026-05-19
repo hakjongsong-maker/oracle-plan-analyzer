@@ -1,13 +1,13 @@
-2026-05-19 11:43:49 [INFO    ] app_logger:55 — ============================================================
-2026-05-19 11:43:49 [INFO    ] app_logger:56 — Oracle Plan Analyzer 시작
-2026-05-19 11:43:49 [INFO    ] app_logger:57 — 로그 파일: C:\Users\SDI_USER\Desktop\OraclePlanAnalyzer\oracle_plan_analyzer.log
-2026-05-19 11:43:49 [INFO    ] app_logger:58 — ============================================================
-2026-05-19 11:43:49 [INFO    ] main:626 — 애플리케이션 초기화 완료
-2026-05-19 11:44:29 [INFO    ] db_manager:86 — [DB1] 접속 시도 — alias=USMC1FCP1, user=clmes_olt, tns_file=D:/hakjong/000.연결정보/tnsnames.ora
-2026-05-19 11:44:29 [ERROR   ] db_manager:101 — [DB1] 접속 실패: DPY-3016: python-oracledb thin mode cannot be used because the cryptography package cannot be imported
-cannot import name x509
-2026-05-19 11:44:29 [ERROR   ] main:151 — DB1 접속 오류: DPY-3016: python-oracledb thin mode cannot be used because the cryptography package cannot be imported
-cannot import name x509
+2026-05-19 11:49:15 [INFO    ] app_logger:55 — ============================================================
+2026-05-19 11:49:15 [INFO    ] app_logger:56 — Oracle Plan Analyzer 시작
+2026-05-19 11:49:15 [INFO    ] app_logger:57 — 로그 파일: C:\Users\SDI_USER\Desktop\OraclePlanAnalyzer\oracle_plan_analyzer.log
+2026-05-19 11:49:15 [INFO    ] app_logger:58 — ============================================================
+2026-05-19 11:49:15 [INFO    ] main:626 — 애플리케이션 초기화 완료
+2026-05-19 11:49:41 [INFO    ] db_manager:86 — [DB1] 접속 시도 — alias=USMC1FCP1, user=clmes_olt, tns_file=D:/hakjong/000.연결정보/tnsnames.ora
+2026-05-19 11:49:41 [ERROR   ] db_manager:101 — [DB1] 접속 실패: DPY-3016: python-oracledb thin mode cannot be used because the cryptography package cannot be imported
+No module named 'cryptography.hazmat.primitives.kdf'
+2026-05-19 11:49:41 [ERROR   ] main:151 — DB1 접속 오류: DPY-3016: python-oracledb thin mode cannot be used because the cryptography package cannot be imported
+No module named 'cryptography.hazmat.primitives.kdf'
 Traceback (most recent call last):
   File "db_manager.py", line 92, in connect
   File "oracledb\connection.py", line 1768, in connect
@@ -17,7 +17,7 @@ Traceback (most recent call last):
   File "src/oracledb/impl/thin/utils.pyx", line 100, in oracledb.thin_impl._check_cryptography
   File "oracledb\errors.py", line 199, in _raise_err
 oracledb.exceptions.NotSupportedError: DPY-3016: python-oracledb thin mode cannot be used because the cryptography package cannot be imported
-cannot import name x509
+No module named 'cryptography.hazmat.primitives.kdf'
 
 The above exception was the direct cause of the following exception:
 
@@ -25,5 +25,5 @@ Traceback (most recent call last):
   File "main.py", line 147, in _do
   File "db_manager.py", line 102, in connect
 db_manager.ConnectionError: DPY-3016: python-oracledb thin mode cannot be used because the cryptography package cannot be imported
-cannot import name x509
-2026-05-19 11:44:53 [INFO    ] main:629 — 애플리케이션 종료
+No module named 'cryptography.hazmat.primitives.kdf'
+2026-05-19 11:49:52 [INFO    ] main:629 — 애플리케이션 종료
