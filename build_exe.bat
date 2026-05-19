@@ -11,7 +11,7 @@ if errorlevel 1 (
 )
 
 echo.
-echo [1/2] PyInstaller 빌드 시작...
+echo [1/1] PyInstaller 빌드 시작...
 pyinstaller oracle_plan_analyzer.spec --clean
 
 if errorlevel 1 (
@@ -22,21 +22,9 @@ if errorlevel 1 (
 )
 
 echo.
-echo [2/2] 10MB 분할 압축 생성 중...
-python split_archive.py
-
-if errorlevel 1 (
-    echo.
-    echo [오류] 분할 압축 실패
-    pause
-    exit /b 1
-)
-
-echo.
 echo ====================================
-echo  모든 작업 완료!
-echo  - 단독 실행: dist\OraclePlanAnalyzer.exe
-echo  - 분할 배포: dist\release\
+echo  빌드 완료!
+echo  - 실행 파일: dist\OraclePlanAnalyzer.exe
 echo ====================================
-explorer dist\release
+explorer dist
 pause
