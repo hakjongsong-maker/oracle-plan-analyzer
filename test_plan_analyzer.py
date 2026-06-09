@@ -290,17 +290,44 @@ class TestInjectNoDynamicSampling(unittest.TestCase):
         self.assertIn("SELECT", result.upper())
 
     def test_non_select_unchanged(self):
-        """SELECT 가 아닌 문장은 변경 없이 반환."""
+        """INSERT / UPDATE / DELETE 는 변경 없이 반환."""
         sqls = [
             "INSERT INTO t VALUES (1)",
             "UPDATE t SET col = 1",
             "DELETE FROM t WHERE id = 1",
-            "WITH cte AS (SELECT 1 FROM dual) SELECT * FROM cte",
         ]
         for sql in sqls:
-            if not sql.lstrip().upper().startswith("SELECT"):
-                self.assertEqual(_inject_no_dynamic_sampling(sql), sql,
-                                 f"변경되면 안 되는 SQL이 변경됨: {sql}")
+            self.assertEqual(_inject_no_dynamic_sampling(sql), sql,
+                             f"변경되면 안 되는 SQL이 변경됨: {sql}")
+
+    def test_with_clause_gets_hint(self):
+        """WITH 절의 메인 SELECT 뒤에 힌트가 삽입되는지 확인."""
+        sql = "WITH cte AS (SELECT 1 FROM dual) SELECT * FROM cte"
+        result = _inject_no_dynamic_sampling(sql)
+        # 힌트가 삽입됐는지
+        self.assertIn("dynamic_sampling(0)", result)
+        # CTE 내부 SELECT 는 그대로 유지
+        self.assertIn("(SELECT 1 FROM dual)", result)
+        # 힌트가 CTE 밖(메인 SELECT 뒤)에 위치하는지
+        cte_close = result.find(') SELECT')     # ") SELECT" 위치 = CTE 닫힘
+        hint_pos  = result.find('dynamic_sampling')
+        self.assertGreater(cte_close, 0)
+        self.assertGreater(hint_pos, cte_close, "힌트가 CTE 안이 아닌 메인 SELECT 뒤에 있어야 함")
+
+    def test_with_multiple_ctes(self):
+        """여러 CTE 가 있는 WITH 절도 메인 SELECT 에만 힌트가 삽입되는지 확인."""
+        sql = ("WITH cte1 AS (SELECT * FROM a), "
+               "cte2 AS (SELECT * FROM b) "
+               "SELECT * FROM cte1 JOIN cte2 ON cte1.id = cte2.id")
+        result = _inject_no_dynamic_sampling(sql)
+        self.assertIn("dynamic_sampling(0)", result)
+        # CTE 내부 두 SELECT 는 그대로
+        self.assertIn("(SELECT * FROM a)", result)
+        self.assertIn("(SELECT * FROM b)", result)
+        # 힌트는 두 CTE 괄호가 모두 닫힌 뒤에 위치
+        last_cte_close = result.rfind(') SELECT')
+        hint_pos = result.find('dynamic_sampling')
+        self.assertGreater(hint_pos, last_cte_close)
 
     def test_case_insensitive(self):
         """소문자 select 도 처리되는지 확인."""

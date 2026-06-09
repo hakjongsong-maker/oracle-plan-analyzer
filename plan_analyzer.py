@@ -32,38 +32,106 @@ class PlanResult:
 
 _HASH_RE = re.compile(r"Plan hash value:\s*(\d+)", re.IGNORECASE)
 
-# SELECT 키워드 (앞에 공백 허용, 이미 힌트 블록이 있는 경우 포함)
-_SELECT_HINT_RE = re.compile(
-    r"(SELECT\s*)(/\*\+[^*]*\*/)?\s*",
-    re.IGNORECASE,
-)
+def _find_main_select_pos(sql: str) -> int:
+    """
+    SQL 에서 괄호 깊이(depth) = 0 인 첫 번째 SELECT 키워드 위치를 반환.
+
+    동작 원리:
+    - 문자열 리터럴(' ... ') 과 주석(-- / /* */) 내부는 무시
+    - '(' 마다 depth+1, ')' 마다 depth-1
+    - depth=0 인 SELECT 만 반환 → WITH 절 내부 CTE 의 SELECT 는 건너뜀
+
+    찾지 못하면 -1 반환.
+    """
+    n = len(sql)
+    upper = sql.upper()
+    i = 0
+    depth = 0
+
+    while i < n:
+        ch = sql[i]
+
+        # ── 문자열 리터럴 스킵 ('...') ──────────────────────────────────────
+        if ch == "'":
+            i += 1
+            while i < n:
+                if sql[i] == "'":
+                    i += 1
+                    if i < n and sql[i] == "'":   # '' 이스케이프
+                        i += 1
+                    else:
+                        break                      # 문자열 끝
+                else:
+                    i += 1
+            continue
+
+        # ── 라인 주석 스킵 (-- ...) ─────────────────────────────────────────
+        if ch == '-' and i + 1 < n and sql[i + 1] == '-':
+            while i < n and sql[i] != '\n':
+                i += 1
+            continue
+
+        # ── 블록 주석 스킵 (/* ... */) ──────────────────────────────────────
+        if ch == '/' and i + 1 < n and sql[i + 1] == '*':
+            end = sql.find('*/', i + 2)
+            i = (end + 2) if end >= 0 else n
+            continue
+
+        # ── 괄호 깊이 추적 ──────────────────────────────────────────────────
+        if ch == '(':
+            depth += 1
+        elif ch == ')':
+            depth -= 1
+
+        # ── depth=0 인 SELECT 탐지 ──────────────────────────────────────────
+        elif depth == 0 and upper[i:i + 6] == 'SELECT':
+            left_ok  = (i == 0) or not (sql[i - 1].isalpha() or sql[i - 1] == '_')
+            right_ok = (i + 6 >= n) or not (sql[i + 6].isalpha() or sql[i + 6] == '_')
+            if left_ok and right_ok:
+                return i
+
+        i += 1
+
+    return -1
 
 
 def _inject_no_dynamic_sampling(sql: str) -> str:
     """
-    SQL이 SELECT 로 시작할 때 첫 번째 SELECT 뒤에
-    /*+ dynamic_sampling(0) */ 힌트를 추가한다.
+    SELECT 또는 WITH ... SELECT 구문의 메인 SELECT 뒤에
+    /*+ dynamic_sampling(0) */ 힌트를 삽입한다.
 
-    - ALTER SESSION 없이 Oracle Dynamic Sampling 을 SQL 힌트 레벨로 차단
-    - 이미 힌트 블록이 있으면 기존 블록 안에 추가
-    - SELECT 가 아닌 문장(WITH/INSERT/UPDATE/DELETE)은 그대로 반환
+    - ALTER SESSION 불필요 — SQL 힌트 레벨로 Dynamic Sampling 차단
+    - WITH 절 포함 시 CTE 내부 SELECT 는 건드리지 않고 메인 SELECT 에만 삽입
+    - 이미 힌트 블록이 있으면 그 안에 dynamic_sampling(0) 추가
+    - INSERT / UPDATE / DELETE 등 SELECT 없는 문장은 원본 반환
     """
     stripped = sql.lstrip()
-    if not re.match(r"SELECT\b", stripped, re.IGNORECASE):
+    upper = stripped.upper()
+
+    if not (upper.startswith('SELECT') or upper.startswith('WITH')):
         return sql   # 힌트 추가 불가 → 원본 반환
 
-    def _replace(m: re.Match) -> str:
-        kw = m.group(1)          # "SELECT " (원본 케이스·공백 유지)
-        existing = m.group(2)    # 기존 /*+ ... */ 또는 None
+    pos = _find_main_select_pos(sql)
+    if pos < 0:
+        return sql
 
-        if existing:
-            # /*+ 기존 내용 */ → /*+ dynamic_sampling(0) 기존 내용 */
-            new_hint = existing.replace("/*+", "/*+ dynamic_sampling(0)", 1)
-            return kw + new_hint + " "
-        else:
-            return kw + "/*+ dynamic_sampling(0) */ "
+    select_end = pos + len('SELECT')   # SELECT 키워드 끝 위치
+    after = sql[select_end:]           # SELECT 이후 문자열
 
-    return _SELECT_HINT_RE.sub(_replace, sql, count=1)
+    # 기존 힌트 블록이 SELECT 바로 뒤에 있는지 확인
+    m = re.match(r'(\s*)(/\*\+)(.*?)(\*/)', after, re.DOTALL)
+    if m and not after[:m.start(2)].strip():
+        # 기존 힌트 블록에 dynamic_sampling(0) 추가
+        return (sql[:select_end]
+                + m.group(1)                         # SELECT 뒤 공백
+                + '/*+'
+                + ' dynamic_sampling(0) '
+                + m.group(3)                         # 기존 힌트 내용
+                + '*/'
+                + after[m.end():])
+    else:
+        # 새 힌트 블록 삽입
+        return sql[:select_end] + ' /*+ dynamic_sampling(0) */' + sql[select_end:]
 
 # DATE/TIMESTAMP/INTERVAL 리터럴은 치환 제외, 나머지 문자열 상수만 치환
 # 예) 'SCOTT' → :v1  /  DATE '2024-01-01' → 유지
