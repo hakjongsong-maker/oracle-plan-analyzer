@@ -18,10 +18,10 @@ from tns_parser import get_aliases
 # ── Color palette ─────────────────────────────────────────────────────────────
 BG_ROOT       = "#f0f2f5"
 BG_CARD       = "#ffffff"
-BG_SQL        = "#1e1e2e"
-FG_SQL        = "#cdd6f4"
-BG_PLAN       = "#0d1117"
-FG_PLAN       = "#e6edf3"
+BG_SQL        = "#ffffff"
+FG_SQL        = "#1e1e2e"
+BG_PLAN       = "#f8f9fa"
+FG_PLAN       = "#1e1e2e"
 BG_CONNECTED  = "#22c55e"
 BG_DISCONNECTED = "#94a3b8"
 BG_ERROR      = "#ef4444"
@@ -262,8 +262,8 @@ class App(tk.Tk):
 
         sql_container, self._sql_text = _scrolled_text(
             sql_frame,
-            bg=BG_SQL, fg=FG_SQL, insertbackground=FG_SQL,
-            font=("Consolas", 11), height=8,
+            bg=BG_SQL, fg=FG_SQL, insertbackground="#1e1e2e",
+            font=("Consolas", 13), height=8,
             relief="flat", bd=0, undo=True,
         )
         sql_container.pack(fill="both", expand=True, padx=4, pady=4)
@@ -272,9 +272,9 @@ class App(tk.Tk):
         self._sql_text.bind("<KeyRelease>", self._highlight_sql)
 
         # Define SQL keyword tags
-        self._sql_text.tag_configure("keyword", foreground="#89b4fa")
-        self._sql_text.tag_configure("string",  foreground="#a6e3a1")
-        self._sql_text.tag_configure("comment", foreground="#6c7086")
+        self._sql_text.tag_configure("keyword", foreground="#0050ef", font=("Consolas", 13, "bold"))
+        self._sql_text.tag_configure("string",  foreground="#008000")
+        self._sql_text.tag_configure("comment", foreground="#808080")
 
         # Run button
         run_frame = tk.Frame(sql_frame, bg=BG_ROOT)
@@ -311,15 +311,15 @@ class App(tk.Tk):
             hdr = tk.Frame(tab_frame, bg=BG_PLAN)
             hdr.pack(fill="x", padx=4, pady=(4, 0))
             tk.Label(hdr, text="Plan hash value:", bg=BG_PLAN,
-                     fg="#64748b", font=("Segoe UI", 9)).pack(side="left")
-            hl = tk.Label(hdr, text="—", bg=BG_PLAN, fg="#94a3b8",
-                          font=("Consolas", 10, "bold"), padx=8, pady=2)
+                     fg="#334155", font=("Segoe UI", 10, "bold")).pack(side="left")
+            hl = tk.Label(hdr, text="—", bg=BG_PLAN, fg="#64748b",
+                          font=("Consolas", 11, "bold"), padx=8, pady=2)
             hl.pack(side="left", padx=4)
             self._hash_labels[i] = hl
 
             inner, plan_text = _scrolled_text(
                 tab_frame, bg=BG_PLAN, fg=FG_PLAN,
-                font=("Consolas", 10), state="disabled",
+                font=("Consolas", 12), state="disabled",
                 relief="flat", bd=0,
             )
             inner.pack(fill="both", expand=True, padx=4, pady=4)
@@ -330,7 +330,7 @@ class App(tk.Tk):
         self._nb.add(self._compare_frame, text="  비교  ")
         _, self._compare_text = _scrolled_text(
             self._compare_frame, bg=BG_PLAN, fg=FG_PLAN,
-            font=("Consolas", 10), state="disabled", relief="flat", bd=0,
+            font=("Consolas", 12), state="disabled", relief="flat", bd=0,
         )
         self._compare_text.master.pack(fill="both", expand=True, padx=4, pady=4)
 
@@ -338,15 +338,15 @@ class App(tk.Tk):
         self._tuning_frame = tk.Frame(self._nb, bg=BG_PLAN)
         self._nb.add(self._tuning_frame, text="  튜닝 가이드  ")
         _, self._tuning_text = _scrolled_text(
-            self._tuning_frame, bg="#0f172a", fg="#e2e8f0",
-            font=("Consolas", 10), state="disabled", relief="flat", bd=0,
+            self._tuning_frame, bg=BG_PLAN, fg=FG_PLAN,
+            font=("Consolas", 12), state="disabled", relief="flat", bd=0,
         )
         self._tuning_text.master.pack(fill="both", expand=True, padx=4, pady=4)
-        self._tuning_text.tag_configure("warn",    foreground="#fbbf24", font=("Consolas", 10, "bold"))
-        self._tuning_text.tag_configure("ok",      foreground="#4ade80", font=("Consolas", 10, "bold"))
-        self._tuning_text.tag_configure("hint",    foreground="#60a5fa")
-        self._tuning_text.tag_configure("section", foreground="#c084fc", font=("Consolas", 10, "bold"))
-        self._tuning_text.tag_configure("code",    foreground="#fb923c")
+        self._tuning_text.tag_configure("warn",    foreground="#b45309", font=("Consolas", 12, "bold"))
+        self._tuning_text.tag_configure("ok",      foreground="#15803d", font=("Consolas", 12, "bold"))
+        self._tuning_text.tag_configure("hint",    foreground="#1d4ed8")
+        self._tuning_text.tag_configure("section", foreground="#7c3aed", font=("Consolas", 12, "bold"))
+        self._tuning_text.tag_configure("code",    foreground="#c2410c")
 
         self._update_tab_titles()
 
@@ -543,8 +543,8 @@ class App(tk.Tk):
         # Color the hash badges in compare view
         text = self._compare_text
         text.config(state="normal")
-        text.tag_configure("hash_diff", foreground="#fbbf24", font=("Consolas", 10, "bold"))
-        text.tag_configure("hash_same", foreground="#4ade80", font=("Consolas", 10, "bold"))
+        text.tag_configure("hash_diff", foreground="#b45309", font=("Consolas", 12, "bold"))
+        text.tag_configure("hash_same", foreground="#15803d", font=("Consolas", 12, "bold"))
         text.config(state="disabled")
 
     def _build_tuning_view(self, results: List[PlanResult]):
