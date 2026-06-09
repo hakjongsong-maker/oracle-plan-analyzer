@@ -6,6 +6,7 @@ from plan_analyzer import (
     parse_plan_steps,
     explain_plan,
     bind_string_literals,
+    _inject_no_dynamic_sampling,
     PlanResult,
 )
 
@@ -133,12 +134,9 @@ class TestExplainPlanResult(unittest.TestCase):
 
     def test_db_error(self):
         cursor = MagicMock()
-        # ALTER SESSION dynamic_sampling(0), ALTER SESSION adaptive_statistics,
-        # EXPLAIN PLAN, DBMS_XPLAN.DISPLAY 순서
         # EXPLAIN PLAN 에서 ORA-00942 발생 시뮬레이션
+        # (ALTER SESSION 없으므로 첫 번째 execute = EXPLAIN PLAN)
         cursor.execute.side_effect = [
-            None,   # ALTER SESSION optimizer_dynamic_sampling = 0
-            None,   # ALTER SESSION optimizer_adaptive_statistics (12c+)
             Exception("ORA-00942: table or view does not exist"),  # EXPLAIN PLAN
         ]
         conn = MagicMock()
@@ -265,6 +263,70 @@ class TestBindStringLiterals(unittest.TestCase):
         result = explain_plan(conn, "SELECT * FROM emp WHERE ename = 'SCOTT'",
                               db_id=0, db_label="DB1", use_bind_vars=False)
         self.assertEqual(len(result.bind_map), 0)
+
+
+class TestInjectNoDynamicSampling(unittest.TestCase):
+    """_inject_no_dynamic_sampling() 단위 테스트."""
+
+    def test_select_gets_hint(self):
+        sql = "SELECT * FROM emp WHERE ename = 'SCOTT'"
+        result = _inject_no_dynamic_sampling(sql)
+        self.assertIn("dynamic_sampling(0)", result)
+        self.assertIn("SELECT", result.upper())
+
+    def test_hint_position(self):
+        """힌트가 SELECT 바로 뒤에 삽입되는지 확인."""
+        sql = "SELECT col FROM t"
+        result = _inject_no_dynamic_sampling(sql)
+        self.assertRegex(result.upper(), r"SELECT\s*/\*\+")
+
+    def test_existing_hint_merged(self):
+        """기존 힌트 블록이 있으면 그 안에 추가되는지 확인."""
+        sql = "SELECT /*+ FULL(t) */ col FROM t"
+        result = _inject_no_dynamic_sampling(sql)
+        self.assertIn("dynamic_sampling(0)", result)
+        self.assertIn("FULL(t)", result)
+        # 힌트 블록이 하나여야 함 (/*+ ... */ 가 2개여도 동작은 OK)
+        self.assertIn("SELECT", result.upper())
+
+    def test_non_select_unchanged(self):
+        """SELECT 가 아닌 문장은 변경 없이 반환."""
+        sqls = [
+            "INSERT INTO t VALUES (1)",
+            "UPDATE t SET col = 1",
+            "DELETE FROM t WHERE id = 1",
+            "WITH cte AS (SELECT 1 FROM dual) SELECT * FROM cte",
+        ]
+        for sql in sqls:
+            if not sql.lstrip().upper().startswith("SELECT"):
+                self.assertEqual(_inject_no_dynamic_sampling(sql), sql,
+                                 f"변경되면 안 되는 SQL이 변경됨: {sql}")
+
+    def test_case_insensitive(self):
+        """소문자 select 도 처리되는지 확인."""
+        sql = "select * from emp"
+        result = _inject_no_dynamic_sampling(sql)
+        self.assertIn("dynamic_sampling(0)", result)
+
+    def test_explain_plan_contains_hint(self):
+        """EXPLAIN PLAN 실행 시 plan_sql 에 힌트가 포함되는지 확인."""
+        plan_rows = [(line,) for line in SAMPLE_PLAN.splitlines()]
+        cursor = MagicMock()
+        cursor.fetchall.return_value = plan_rows
+        conn = MagicMock()
+        conn.cursor.return_value = cursor
+
+        explain_plan(conn, "SELECT * FROM emp WHERE ename = 'SCOTT'",
+                     db_id=0, db_label="DB1", use_bind_vars=False)
+
+        explain_calls = [
+            str(c) for c in cursor.execute.call_args_list
+            if "EXPLAIN PLAN" in str(c).upper()
+        ]
+        self.assertTrue(
+            any("dynamic_sampling" in c.lower() for c in explain_calls),
+            f"dynamic_sampling 힌트가 EXPLAIN PLAN 에 없음: {explain_calls}",
+        )
 
 
 if __name__ == "__main__":

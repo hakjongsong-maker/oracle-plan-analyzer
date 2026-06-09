@@ -32,6 +32,39 @@ class PlanResult:
 
 _HASH_RE = re.compile(r"Plan hash value:\s*(\d+)", re.IGNORECASE)
 
+# SELECT 키워드 (앞에 공백 허용, 이미 힌트 블록이 있는 경우 포함)
+_SELECT_HINT_RE = re.compile(
+    r"(SELECT\s*)(/\*\+[^*]*\*/)?\s*",
+    re.IGNORECASE,
+)
+
+
+def _inject_no_dynamic_sampling(sql: str) -> str:
+    """
+    SQL이 SELECT 로 시작할 때 첫 번째 SELECT 뒤에
+    /*+ dynamic_sampling(0) */ 힌트를 추가한다.
+
+    - ALTER SESSION 없이 Oracle Dynamic Sampling 을 SQL 힌트 레벨로 차단
+    - 이미 힌트 블록이 있으면 기존 블록 안에 추가
+    - SELECT 가 아닌 문장(WITH/INSERT/UPDATE/DELETE)은 그대로 반환
+    """
+    stripped = sql.lstrip()
+    if not re.match(r"SELECT\b", stripped, re.IGNORECASE):
+        return sql   # 힌트 추가 불가 → 원본 반환
+
+    def _replace(m: re.Match) -> str:
+        kw = m.group(1)          # "SELECT " (원본 케이스·공백 유지)
+        existing = m.group(2)    # 기존 /*+ ... */ 또는 None
+
+        if existing:
+            # /*+ 기존 내용 */ → /*+ dynamic_sampling(0) 기존 내용 */
+            new_hint = existing.replace("/*+", "/*+ dynamic_sampling(0)", 1)
+            return kw + new_hint + " "
+        else:
+            return kw + "/*+ dynamic_sampling(0) */ "
+
+    return _SELECT_HINT_RE.sub(_replace, sql, count=1)
+
 # DATE/TIMESTAMP/INTERVAL 리터럴은 치환 제외, 나머지 문자열 상수만 치환
 # 예) 'SCOTT' → :v1  /  DATE '2024-01-01' → 유지
 _LITERAL_RE = re.compile(
@@ -122,30 +155,18 @@ def explain_plan(connection, sql: str, db_id: int, db_label: str,
 
     cursor = connection.cursor()
     try:
-        # ── Oracle Dynamic Sampling 비활성화 ────────────────────────────────
-        # 핵심 원인: EXPLAIN PLAN 실행 중 Oracle 옵티마이저가 테이블 통계가
-        # 없거나 부정확할 때 자동으로 SELECT ... SAMPLE(...) 쿼리를 내부적으로
-        # 실행해 통계를 수집(Dynamic Sampling/Adaptive Statistics).
-        # → 사용자 입력 쿼리가 실제 실행되는 것처럼 느껴지는 현상의 근본 원인.
-        # ALTER SESSION 으로 비활성화해 EXPLAIN PLAN 중 실제 쿼리 실행을 차단.
-        try:
-            cursor.execute("ALTER SESSION SET optimizer_dynamic_sampling = 0")
-        except Exception:
-            pass  # 권한 없는 환경에서도 무시하고 계속 진행
-
-        # Oracle 12c+ adaptive statistics 도 비활성화
-        try:
-            cursor.execute("ALTER SESSION SET optimizer_adaptive_statistics = FALSE")
-        except Exception:
-            pass
+        # ── Dynamic Sampling 차단 (SQL 힌트 방식 — ALTER SESSION 불필요) ──────
+        # EXPLAIN PLAN 실행 중 Oracle 옵티마이저가 테이블 통계 부족 시
+        # SELECT ... SAMPLE(...) 을 내부 실행(Dynamic Sampling)하는 현상 차단.
+        # ALTER SESSION 대신 /*+ dynamic_sampling(0) */ 힌트를 SQL에 직접 삽입.
+        # SELECT 이외의 문장(WITH/INSERT/UPDATE/DELETE)은 힌트 미삽입.
+        plan_sql = _inject_no_dynamic_sampling(converted_sql)
 
         # ── EXPLAIN PLAN 직접 실행 ───────────────────────────────────────────
-        # Oracle 공식 권장 방식: cursor.execute("EXPLAIN PLAN ... FOR {sql}")
-        # EXPLAIN PLAN 은 SELECT 를 실행하지 않고 실행 계획만 생성해 PLAN_TABLE 에 저장.
-        #
-        # use_bind_vars=True  → converted_sql 의 :v1 에 None(NULL) 바인드
-        # use_bind_vars=False → 원본 SQL(리터럴 포함), 바인드 변수 없음
-        explain_stmt = f"EXPLAIN PLAN SET STATEMENT_ID = '{stmt_id}' FOR {converted_sql}"
+        # EXPLAIN PLAN 은 SELECT 를 실행하지 않고 실행 계획만 PLAN_TABLE 에 저장.
+        # use_bind_vars=True  → plan_sql 의 :v1 에 None(NULL) 바인드
+        # use_bind_vars=False → 원본 SQL(리터럴), 바인드 변수 없음
+        explain_stmt = f"EXPLAIN PLAN SET STATEMENT_ID = '{stmt_id}' FOR {plan_sql}"
 
         if use_bind_vars and bind_map:
             bind_params = {k.lstrip(':'): None for k in bind_map.keys()}
@@ -172,11 +193,6 @@ def explain_plan(connection, sql: str, db_id: int, db_label: str,
         result.success = False
 
     finally:
-        # Dynamic Sampling 설정 원복 (세션 재사용 대비)
-        try:
-            cursor.execute("ALTER SESSION SET optimizer_dynamic_sampling = 2")
-        except Exception:
-            pass
         try:
             cursor.close()
         except Exception:
