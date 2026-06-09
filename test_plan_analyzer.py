@@ -94,21 +94,8 @@ class TestStatementId(unittest.TestCase):
             f"STATEMENT_ID OPA3 not found in calls: {cursor.execute.call_args_list}",
         )
 
-    def test_pre_delete_called(self):
-        """실행 전 DELETE 가 호출되는지 확인."""
-        plan_rows = [(line,) for line in SAMPLE_PLAN.splitlines()]
-        conn, cursor = self._make_mock_conn(plan_rows)
-
-        explain_plan(conn, "SELECT * FROM TABS", db_id=0, db_label="DB1")
-
-        delete_calls = [
-            str(c) for c in cursor.execute.call_args_list
-            if "DELETE" in str(c).upper()
-        ]
-        self.assertTrue(len(delete_calls) >= 1, "사전 DELETE 가 호출되지 않았습니다.")
-
-    def test_no_post_delete(self):
-        """결과 조회 후 DELETE 가 한 번만(사전 1회) 호출되는지 확인."""
+    def test_no_delete_called(self):
+        """DELETE 가 전혀 호출되지 않는지 확인."""
         plan_rows = [(line,) for line in SAMPLE_PLAN.splitlines()]
         conn, cursor = self._make_mock_conn(plan_rows)
 
@@ -118,7 +105,7 @@ class TestStatementId(unittest.TestCase):
             c for c in cursor.execute.call_args_list
             if "DELETE" in str(c).upper()
         ]
-        self.assertEqual(len(delete_calls), 1, "DELETE 는 사전 1회만 호출돼야 합니다.")
+        self.assertEqual(len(delete_calls), 0, "PLAN_TABLE DELETE 가 호출되면 안 됩니다.")
 
 
 class TestExplainPlanResult(unittest.TestCase):

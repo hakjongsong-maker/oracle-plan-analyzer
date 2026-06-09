@@ -81,17 +81,6 @@ def explain_plan(connection, sql: str, db_id: int, db_label: str) -> PlanResult:
     try:
         cursor = connection.cursor()
 
-        # 동일 STATEMENT_ID 중복 방지를 위해 실행 전에만 삭제
-        # (실행 후 데이터는 PLAN_TABLE에 유지)
-        try:
-            cursor.execute(
-                "DELETE FROM PLAN_TABLE WHERE STATEMENT_ID = :sid",
-                sid=stmt_id,
-            )
-            connection.commit()
-        except Exception:
-            pass
-
         # EXPLAIN PLAN 실행
         cursor.execute(
             f"EXPLAIN PLAN SET STATEMENT_ID = '{stmt_id}' FOR {sql}"
