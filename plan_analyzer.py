@@ -80,20 +80,11 @@ def explain_plan(connection, sql: str, db_id: int, db_label: str) -> PlanResult:
     try:
         cursor = connection.cursor()
 
-        # Remove old plan rows for safety
-        try:
-            cursor.execute(
-                "DELETE FROM PLAN_TABLE WHERE STATEMENT_ID = :sid",
-                sid=stmt_id,
-            )
-            connection.commit()
-        except Exception:
-            pass
-
-        # Create explain plan
+        # Create explain plan (STATEMENT_ID는 UUID 기반 — 충돌 없음)
         cursor.execute(f"EXPLAIN PLAN SET STATEMENT_ID = '{stmt_id}' FOR {sql}")
 
         # Retrieve plan via DBMS_XPLAN.DISPLAY (ALL format)
+        # PLAN_TABLE 데이터는 삭제하지 않고 유지
         cursor.execute(
             "SELECT PLAN_TABLE_OUTPUT "
             "FROM TABLE(DBMS_XPLAN.DISPLAY('PLAN_TABLE', :sid, 'ALL'))",
@@ -106,16 +97,6 @@ def explain_plan(connection, sql: str, db_id: int, db_label: str) -> PlanResult:
         result.plan_hash = get_plan_hash(plan_text)
         result.plan_steps = parse_plan_steps(plan_text)
         result.success = True
-
-        # Cleanup
-        try:
-            cursor.execute(
-                "DELETE FROM PLAN_TABLE WHERE STATEMENT_ID = :sid",
-                sid=stmt_id,
-            )
-            connection.commit()
-        except Exception:
-            pass
 
         cursor.close()
     except Exception as e:
