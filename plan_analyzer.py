@@ -123,20 +123,27 @@ def explain_plan(connection, sql: str, db_id: int, db_label: str,
     try:
         cursor = connection.cursor()
 
-        # EXPLAIN PLAN 을 PL/SQL EXECUTE IMMEDIATE 로 실행
-        # ─ 이유: cursor.execute()로 직접 실행하면 converted_sql 안의
-        #   :v1 등 바인드 변수를 oracledb 가 파라미터로 오해해
-        #   SQL 이 실제 실행되는 문제 방지
-        # ─ converted_sql 내부 작은따옴표를 '' 로 이스케이프
-        sql_escaped = converted_sql.replace("'", "''")
-        plsql = (
-            f"BEGIN "
-            f"  EXECUTE IMMEDIATE "
-            f"    'EXPLAIN PLAN SET STATEMENT_ID = ''{stmt_id}'' "
-            f"     FOR {sql_escaped}'; "
-            f"END;"
-        )
-        cursor.execute(plsql)
+        # ── EXPLAIN PLAN 직접 실행 ────────────────────────────────────────────
+        # Oracle 공식 권장 방식: cursor.execute("EXPLAIN PLAN ... FOR {sql}")
+        # ─ EXPLAIN PLAN 은 Oracle 이 SELECT 를 절대 실행하지 않음을 보장
+        # ─ EXECUTE IMMEDIATE 래핑 불가: Oracle 문서상 EXPLAIN PLAN 은
+        #   EXECUTE IMMEDIATE 의 지원 대상이 아니며, 래핑 시 내부 SQL 이
+        #   실제로 실행될 수 있음
+        #
+        # 바인드 변수 처리:
+        #  use_bind_vars=True  → converted_sql 에 :v1 등 존재
+        #                        None 값으로 바인드 → Oracle 이 통계 기반 플랜 생성
+        #                        (바인드 변수 피킹 없이 일반 플랜 — 운영 환경 대표값)
+        #  use_bind_vars=False → 원본 SQL(리터럴 포함), 바인드 변수 없음
+
+        explain_stmt = f"EXPLAIN PLAN SET STATEMENT_ID = '{stmt_id}' FOR {converted_sql}"
+
+        if use_bind_vars and bind_map:
+            # :v1, :v2 … 에 대해 None(NULL) 을 전달해 oracledb 가 정상 바인딩하도록 함
+            bind_params = {k.lstrip(':'): None for k in bind_map.keys()}
+            cursor.execute(explain_stmt, bind_params)
+        else:
+            cursor.execute(explain_stmt)
 
         # DBMS_XPLAN.DISPLAY 로 실행계획 조회 (stmt_id 명시해 해당 플랜만 조회)
         cursor.execute(
