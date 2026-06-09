@@ -1,7 +1,6 @@
 """Execute EXPLAIN PLAN via DBMS_XPLAN and parse results."""
 from __future__ import annotations
 import re
-import uuid
 from dataclasses import dataclass, field
 from typing import List, Optional, Dict
 
@@ -70,7 +69,9 @@ def parse_plan_steps(plan_text: str) -> List[PlanStep]:
 
 def explain_plan(connection, sql: str, db_id: int, db_label: str) -> PlanResult:
     result = PlanResult(db_id=db_id, db_label=db_label)
-    stmt_id = f"OPA_{uuid.uuid4().hex[:12].upper()}"
+
+    # DB별 고정 STATEMENT_ID (OPA1 ~ OPA6) — PLAN_TABLE에서 직접 조회 가능
+    stmt_id = f"OPA{db_id + 1}"
 
     sql = sql.strip().rstrip(";")
     if not sql:
@@ -80,11 +81,23 @@ def explain_plan(connection, sql: str, db_id: int, db_label: str) -> PlanResult:
     try:
         cursor = connection.cursor()
 
-        # Create explain plan (STATEMENT_ID는 UUID 기반 — 충돌 없음)
-        cursor.execute(f"EXPLAIN PLAN SET STATEMENT_ID = '{stmt_id}' FOR {sql}")
+        # 동일 STATEMENT_ID 중복 방지를 위해 실행 전에만 삭제
+        # (실행 후 데이터는 PLAN_TABLE에 유지)
+        try:
+            cursor.execute(
+                "DELETE FROM PLAN_TABLE WHERE STATEMENT_ID = :sid",
+                sid=stmt_id,
+            )
+            connection.commit()
+        except Exception:
+            pass
 
-        # Retrieve plan via DBMS_XPLAN.DISPLAY (ALL format)
-        # PLAN_TABLE 데이터는 삭제하지 않고 유지
+        # EXPLAIN PLAN 실행
+        cursor.execute(
+            f"EXPLAIN PLAN SET STATEMENT_ID = '{stmt_id}' FOR {sql}"
+        )
+
+        # DBMS_XPLAN.DISPLAY 로 실행계획 조회
         cursor.execute(
             "SELECT PLAN_TABLE_OUTPUT "
             "FROM TABLE(DBMS_XPLAN.DISPLAY('PLAN_TABLE', :sid, 'ALL'))",
