@@ -100,7 +100,8 @@ def parse_plan_steps(plan_text: str) -> List[PlanStep]:
     return steps
 
 
-def explain_plan(connection, sql: str, db_id: int, db_label: str) -> PlanResult:
+def explain_plan(connection, sql: str, db_id: int, db_label: str,
+                 use_bind_vars: bool = True) -> PlanResult:
     result = PlanResult(db_id=db_id, db_label=db_label)
 
     # DB별 고정 STATEMENT_ID (OPA1 ~ OPA6) — PLAN_TABLE에서 직접 조회 가능
@@ -111,9 +112,12 @@ def explain_plan(connection, sql: str, db_id: int, db_label: str) -> PlanResult:
         result.error = "SQL이 비어 있습니다."
         return result
 
-    # 문자열 상수 → 바인드 변수 치환 (플랜 정확도 향상)
-    converted_sql, bind_map = bind_string_literals(sql)
-    result.converted_sql = converted_sql   # 화면 표시용 저장
+    # 체크박스 ON: 문자열 상수 → 바인드 변수 치환 / OFF: 원본 SQL 그대로 사용
+    if use_bind_vars:
+        converted_sql, bind_map = bind_string_literals(sql)
+    else:
+        converted_sql, bind_map = sql, {}
+    result.converted_sql = converted_sql
     result.bind_map = bind_map
 
     try:

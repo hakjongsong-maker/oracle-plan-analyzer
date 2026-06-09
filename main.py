@@ -228,6 +228,7 @@ class App(tk.Tk):
                  font=("Segoe UI", 9, "bold"), fg="#1e40af").pack(side="left", padx=(8, 4), pady=4)
 
         self._tns_path_var = tk.StringVar()
+        self._use_bind_var = tk.BooleanVar(value=True)   # 바인드 변수 치환 여부
         tns_entry = tk.Entry(tns_bar, textvariable=self._tns_path_var,
                              width=55, font=("Segoe UI", 9), state="readonly",
                              readonlybackground="#ffffff", fg="#1e293b")
@@ -284,6 +285,20 @@ class App(tk.Tk):
         self._run_btn.pack(side="right", padx=4)
         _make_button(run_frame, "SQL 지우기", self._clear_sql,
                      bg="#64748b", width=10).pack(side="right", padx=4)
+
+        # 바인드 변수 치환 체크박스
+        bind_cb = tk.Checkbutton(
+            run_frame,
+            text="문자열 상수 → 바인드 변수 변환",
+            variable=self._use_bind_var,
+            bg=BG_ROOT, fg="#334155",
+            activebackground=BG_ROOT,
+            font=("Segoe UI", 9),
+            selectcolor="#ffffff",
+            cursor="hand2",
+        )
+        bind_cb.pack(side="right", padx=12)
+
         self._status_label = tk.Label(run_frame, text="", bg=BG_ROOT,
                                       font=("Segoe UI", 9), fg="#64748b")
         self._status_label.pack(side="left", padx=4)
@@ -434,16 +449,19 @@ class App(tk.Tk):
         self._status_label.config(text="실행계획 조회 중...", fg="#f59e0b")
         self._clear_plan_views()
 
+        use_bind = self._use_bind_var.get()
+
         def _do():
             results = []
-            log.info("실행계획 조회 시작 — 접속 DB: %s", connected_ids)
+            log.info("실행계획 조회 시작 — 접속 DB: %s, 바인드변수 치환: %s",
+                     connected_ids, use_bind)
             for db_id in connected_ids:
                 conn = self._manager.get_connection(db_id)
                 label = self._cards[db_id].get_label()
                 cfg = self._manager.get_config(db_id)
                 if cfg:
                     label = cfg.label or label
-                result = explain_plan(conn, sql, db_id, label)
+                result = explain_plan(conn, sql, db_id, label, use_bind_vars=use_bind)
                 if result.error:
                     log.error("DB%d 실행계획 오류: %s", db_id + 1, result.error)
                 else:

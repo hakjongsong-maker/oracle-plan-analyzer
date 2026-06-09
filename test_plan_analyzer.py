@@ -195,7 +195,7 @@ class TestBindStringLiterals(unittest.TestCase):
         self.assertEqual(binds[":v1"], "'O''Brien'")
 
     def test_explain_plan_uses_converted_sql(self):
-        """explain_plan() 이 치환된 SQL 로 EXPLAIN PLAN 을 실행하는지 확인."""
+        """use_bind_vars=True 일 때 치환된 SQL 로 EXPLAIN PLAN 실행."""
         plan_rows = [(line,) for line in SAMPLE_PLAN.splitlines()]
         cursor = MagicMock()
         cursor.fetchall.return_value = plan_rows
@@ -203,7 +203,7 @@ class TestBindStringLiterals(unittest.TestCase):
         conn.cursor.return_value = cursor
 
         explain_plan(conn, "SELECT * FROM emp WHERE ename = 'SCOTT'",
-                     db_id=0, db_label="DB1")
+                     db_id=0, db_label="DB1", use_bind_vars=True)
 
         explain_calls = [
             str(c) for c in cursor.execute.call_args_list
@@ -212,6 +212,26 @@ class TestBindStringLiterals(unittest.TestCase):
         self.assertTrue(
             any(":v1" in c and "'SCOTT'" not in c for c in explain_calls),
             f"치환된 SQL(:v1)이 EXPLAIN PLAN 에 사용되지 않았습니다.\n{explain_calls}",
+        )
+
+    def test_explain_plan_original_sql_when_unchecked(self):
+        """use_bind_vars=False 일 때 원본 SQL 그대로 EXPLAIN PLAN 실행."""
+        plan_rows = [(line,) for line in SAMPLE_PLAN.splitlines()]
+        cursor = MagicMock()
+        cursor.fetchall.return_value = plan_rows
+        conn = MagicMock()
+        conn.cursor.return_value = cursor
+
+        explain_plan(conn, "SELECT * FROM emp WHERE ename = 'SCOTT'",
+                     db_id=0, db_label="DB1", use_bind_vars=False)
+
+        explain_calls = [
+            str(c) for c in cursor.execute.call_args_list
+            if "EXPLAIN PLAN" in str(c).upper()
+        ]
+        self.assertTrue(
+            any("'SCOTT'" in c for c in explain_calls),
+            f"원본 SQL이 EXPLAIN PLAN 에 사용되어야 합니다.\n{explain_calls}",
         )
 
     def test_result_stores_bind_map(self):
@@ -223,9 +243,21 @@ class TestBindStringLiterals(unittest.TestCase):
         conn.cursor.return_value = cursor
 
         result = explain_plan(conn, "SELECT * FROM emp WHERE ename = 'SCOTT'",
-                              db_id=0, db_label="DB1")
+                              db_id=0, db_label="DB1", use_bind_vars=True)
         self.assertIn(":v1", result.bind_map)
         self.assertEqual(result.bind_map[":v1"], "'SCOTT'")
+
+    def test_bind_map_empty_when_unchecked(self):
+        """use_bind_vars=False 일 때 bind_map 이 비어 있는지 확인."""
+        plan_rows = [(line,) for line in SAMPLE_PLAN.splitlines()]
+        cursor = MagicMock()
+        cursor.fetchall.return_value = plan_rows
+        conn = MagicMock()
+        conn.cursor.return_value = cursor
+
+        result = explain_plan(conn, "SELECT * FROM emp WHERE ename = 'SCOTT'",
+                              db_id=0, db_label="DB1", use_bind_vars=False)
+        self.assertEqual(len(result.bind_map), 0)
 
 
 if __name__ == "__main__":
