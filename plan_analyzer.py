@@ -26,9 +26,42 @@ class PlanResult:
     plan_steps: List[PlanStep] = field(default_factory=list)
     error: Optional[str] = None
     success: bool = False
+    converted_sql: str = ""          # 바인드 변수로 치환된 SQL
+    bind_map: Dict[str, str] = field(default_factory=dict)  # {:v1: "'값'", ...}
 
 
 _HASH_RE = re.compile(r"Plan hash value:\s*(\d+)", re.IGNORECASE)
+
+# DATE/TIMESTAMP/INTERVAL 리터럴은 치환 제외, 나머지 문자열 상수만 치환
+# 예) 'SCOTT' → :v1  /  DATE '2024-01-01' → 유지
+_LITERAL_RE = re.compile(
+    r"(DATE|TIMESTAMP|INTERVAL)\s*'(?:[^']|'')*'"   # 날짜/시간 리터럴 — 유지
+    r"|"
+    r"'(?:[^']|'')*'",                               # 일반 문자열 리터럴 — 치환
+    re.IGNORECASE,
+)
+
+
+def bind_string_literals(sql: str) -> tuple[str, dict]:
+    """
+    SQL 내 문자열 상수('값')를 바인드 변수(:v1, :v2, ...)로 치환.
+    DATE/TIMESTAMP/INTERVAL 리터럴은 그대로 유지.
+    반환: (치환된 SQL, {':v1': "'원래값'", ...})
+    """
+    binds: dict = {}
+    counter = [0]
+
+    def _replace(m: re.Match) -> str:
+        # DATE/TIMESTAMP/INTERVAL 접두어가 있으면 치환하지 않음
+        if m.group(1):
+            return m.group(0)
+        counter[0] += 1
+        var = f":v{counter[0]}"
+        binds[var] = m.group(0)
+        return var
+
+    converted = _LITERAL_RE.sub(_replace, sql)
+    return converted, binds
 
 # Row pattern: |  id  | Operation  | Name  | Rows | Bytes | Cost |  Time  |
 _ROW_RE = re.compile(
@@ -78,12 +111,17 @@ def explain_plan(connection, sql: str, db_id: int, db_label: str) -> PlanResult:
         result.error = "SQL이 비어 있습니다."
         return result
 
+    # 문자열 상수 → 바인드 변수 치환 (플랜 정확도 향상)
+    converted_sql, bind_map = bind_string_literals(sql)
+    result.converted_sql = converted_sql   # 화면 표시용 저장
+    result.bind_map = bind_map
+
     try:
         cursor = connection.cursor()
 
-        # EXPLAIN PLAN 실행
+        # EXPLAIN PLAN 실행 (바인드 변수로 치환된 SQL 사용)
         cursor.execute(
-            f"EXPLAIN PLAN SET STATEMENT_ID = '{stmt_id}' FOR {sql}"
+            f"EXPLAIN PLAN SET STATEMENT_ID = '{stmt_id}' FOR {converted_sql}"
         )
 
         # DBMS_XPLAN.DISPLAY 로 실행계획 조회

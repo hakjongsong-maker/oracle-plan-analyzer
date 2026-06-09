@@ -5,6 +5,7 @@ from plan_analyzer import (
     get_plan_hash,
     parse_plan_steps,
     explain_plan,
+    bind_string_literals,
     PlanResult,
 )
 
@@ -138,6 +139,93 @@ class TestExplainPlanResult(unittest.TestCase):
         result = explain_plan(conn, "SELECT * FROM NO_SUCH_TABLE", db_id=0, db_label="DB1")
         self.assertFalse(result.success)
         self.assertIn("ORA-00942", result.error)
+
+
+class TestBindStringLiterals(unittest.TestCase):
+    """bind_string_literals() 단위 테스트."""
+
+    def test_single_literal(self):
+        sql = "SELECT * FROM emp WHERE ename = 'SCOTT'"
+        converted, binds = bind_string_literals(sql)
+        self.assertIn(":v1", converted)
+        self.assertNotIn("'SCOTT'", converted)
+        self.assertEqual(binds[":v1"], "'SCOTT'")
+
+    def test_multiple_literals(self):
+        sql = "SELECT * FROM emp WHERE deptno = '10' AND ename = 'SCOTT'"
+        converted, binds = bind_string_literals(sql)
+        self.assertIn(":v1", converted)
+        self.assertIn(":v2", converted)
+        self.assertEqual(len(binds), 2)
+
+    def test_no_literals(self):
+        sql = "SELECT * FROM emp WHERE deptno = 10"
+        converted, binds = bind_string_literals(sql)
+        self.assertEqual(converted, sql)
+        self.assertEqual(len(binds), 0)
+
+    def test_date_literal_preserved(self):
+        """DATE 'xxx' 는 치환하지 않음."""
+        sql = "SELECT * FROM emp WHERE hiredate = DATE '2024-01-01'"
+        converted, binds = bind_string_literals(sql)
+        self.assertIn("DATE '2024-01-01'", converted)
+        self.assertEqual(len(binds), 0)
+
+    def test_timestamp_literal_preserved(self):
+        """TIMESTAMP 'xxx' 는 치환하지 않음."""
+        sql = "SELECT * FROM t WHERE ts = TIMESTAMP '2024-01-01 00:00:00'"
+        converted, binds = bind_string_literals(sql)
+        self.assertIn("TIMESTAMP '2024-01-01 00:00:00'", converted)
+        self.assertEqual(len(binds), 0)
+
+    def test_mixed_date_and_string(self):
+        """DATE 리터럴은 유지, 일반 문자열은 치환."""
+        sql = "SELECT * FROM emp WHERE hiredate > DATE '2024-01-01' AND ename = 'SCOTT'"
+        converted, binds = bind_string_literals(sql)
+        self.assertIn("DATE '2024-01-01'", converted)
+        self.assertIn(":v1", converted)
+        self.assertEqual(len(binds), 1)
+        self.assertEqual(binds[":v1"], "'SCOTT'")
+
+    def test_escaped_quote_in_literal(self):
+        """내부 '' 이스케이프 처리."""
+        sql = "SELECT * FROM t WHERE name = 'O''Brien'"
+        converted, binds = bind_string_literals(sql)
+        self.assertIn(":v1", converted)
+        self.assertEqual(binds[":v1"], "'O''Brien'")
+
+    def test_explain_plan_uses_converted_sql(self):
+        """explain_plan() 이 치환된 SQL 로 EXPLAIN PLAN 을 실행하는지 확인."""
+        plan_rows = [(line,) for line in SAMPLE_PLAN.splitlines()]
+        cursor = MagicMock()
+        cursor.fetchall.return_value = plan_rows
+        conn = MagicMock()
+        conn.cursor.return_value = cursor
+
+        explain_plan(conn, "SELECT * FROM emp WHERE ename = 'SCOTT'",
+                     db_id=0, db_label="DB1")
+
+        explain_calls = [
+            str(c) for c in cursor.execute.call_args_list
+            if "EXPLAIN PLAN" in str(c).upper()
+        ]
+        self.assertTrue(
+            any(":v1" in c and "'SCOTT'" not in c for c in explain_calls),
+            f"치환된 SQL(:v1)이 EXPLAIN PLAN 에 사용되지 않았습니다.\n{explain_calls}",
+        )
+
+    def test_result_stores_bind_map(self):
+        """PlanResult 에 bind_map 이 저장되는지 확인."""
+        plan_rows = [(line,) for line in SAMPLE_PLAN.splitlines()]
+        cursor = MagicMock()
+        cursor.fetchall.return_value = plan_rows
+        conn = MagicMock()
+        conn.cursor.return_value = cursor
+
+        result = explain_plan(conn, "SELECT * FROM emp WHERE ename = 'SCOTT'",
+                              db_id=0, db_label="DB1")
+        self.assertIn(":v1", result.bind_map)
+        self.assertEqual(result.bind_map[":v1"], "'SCOTT'")
 
 
 if __name__ == "__main__":
