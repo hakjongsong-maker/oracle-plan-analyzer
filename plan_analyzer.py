@@ -89,8 +89,7 @@ def explain_plan(connection, sql: str, db_id: int, db_label: str) -> PlanResult:
         # DBMS_XPLAN.DISPLAY 로 실행계획 조회
         cursor.execute(
             "SELECT PLAN_TABLE_OUTPUT "
-            "FROM TABLE(DBMS_XPLAN.DISPLAY('PLAN_TABLE', :sid, 'ALL'))",
-            sid=stmt_id,
+            "FROM TABLE(DBMS_XPLAN.DISPLAY('PLAN_TABLE', null, 'serial'))"
         )
         rows = cursor.fetchall()
         plan_text = "\n".join(r[0] for r in rows)
