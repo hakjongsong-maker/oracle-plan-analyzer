@@ -133,7 +133,14 @@ class TestExplainPlanResult(unittest.TestCase):
 
     def test_db_error(self):
         cursor = MagicMock()
-        cursor.execute.side_effect = [None, Exception("ORA-00942: table or view does not exist")]
+        # ALTER SESSION dynamic_sampling(0), ALTER SESSION adaptive_statistics,
+        # EXPLAIN PLAN, DBMS_XPLAN.DISPLAY 순서
+        # EXPLAIN PLAN 에서 ORA-00942 발생 시뮬레이션
+        cursor.execute.side_effect = [
+            None,   # ALTER SESSION optimizer_dynamic_sampling = 0
+            None,   # ALTER SESSION optimizer_adaptive_statistics (12c+)
+            Exception("ORA-00942: table or view does not exist"),  # EXPLAIN PLAN
+        ]
         conn = MagicMock()
         conn.cursor.return_value = cursor
         result = explain_plan(conn, "SELECT * FROM NO_SUCH_TABLE", db_id=0, db_label="DB1")

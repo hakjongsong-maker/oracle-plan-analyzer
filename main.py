@@ -1,5 +1,6 @@
 """Oracle Plan Analyzer — Main Application (tkinter)."""
 from __future__ import annotations
+import concurrent.futures
 import os
 import sys
 import threading
@@ -452,21 +453,40 @@ class App(tk.Tk):
         use_bind = self._use_bind_var.get()
 
         def _do():
-            results = []
             log.info("실행계획 조회 시작 — 접속 DB: %s, 바인드변수 치환: %s",
                      connected_ids, use_bind)
-            for db_id in connected_ids:
+
+            def _run_one(db_id):
+                """단일 DB 에 대해 EXPLAIN PLAN 을 실행하고 PlanResult 를 반환."""
                 conn = self._manager.get_connection(db_id)
                 label = self._cards[db_id].get_label()
                 cfg = self._manager.get_config(db_id)
                 if cfg:
                     label = cfg.label or label
-                result = explain_plan(conn, sql, db_id, label, use_bind_vars=use_bind)
-                if result.error:
-                    log.error("DB%d 실행계획 오류: %s", db_id + 1, result.error)
+                res = explain_plan(conn, sql, db_id, label, use_bind_vars=use_bind)
+                if res.error:
+                    log.error("DB%d 실행계획 오류: %s", db_id + 1, res.error)
                 else:
-                    log.info("DB%d 실행계획 완료 — hash=%s", db_id + 1, result.plan_hash)
-                results.append(result)
+                    log.info("DB%d 실행계획 완료 — hash=%s", db_id + 1, res.plan_hash)
+                return res
+
+            # 여러 DB 를 병렬로 동시 실행 → 총 소요 시간 = max(개별 DB 시간)
+            results = []
+            with concurrent.futures.ThreadPoolExecutor(
+                max_workers=len(connected_ids)
+            ) as executor:
+                future_map = {
+                    executor.submit(_run_one, db_id): db_id
+                    for db_id in connected_ids
+                }
+                for future in concurrent.futures.as_completed(future_map):
+                    try:
+                        results.append(future.result())
+                    except Exception as exc:
+                        db_id = future_map[future]
+                        log.error("DB%d 실행계획 예외: %s", db_id + 1, exc)
+
+            results.sort(key=lambda r: r.db_id)   # DB 순서 정렬 유지
             self.after(0, lambda: self._show_results(results))
 
         threading.Thread(target=_do, daemon=True).start()

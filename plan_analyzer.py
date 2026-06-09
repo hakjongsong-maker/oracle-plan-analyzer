@@ -120,32 +120,40 @@ def explain_plan(connection, sql: str, db_id: int, db_label: str,
     result.converted_sql = converted_sql
     result.bind_map = bind_map
 
+    cursor = connection.cursor()
     try:
-        cursor = connection.cursor()
+        # ── Oracle Dynamic Sampling 비활성화 ────────────────────────────────
+        # 핵심 원인: EXPLAIN PLAN 실행 중 Oracle 옵티마이저가 테이블 통계가
+        # 없거나 부정확할 때 자동으로 SELECT ... SAMPLE(...) 쿼리를 내부적으로
+        # 실행해 통계를 수집(Dynamic Sampling/Adaptive Statistics).
+        # → 사용자 입력 쿼리가 실제 실행되는 것처럼 느껴지는 현상의 근본 원인.
+        # ALTER SESSION 으로 비활성화해 EXPLAIN PLAN 중 실제 쿼리 실행을 차단.
+        try:
+            cursor.execute("ALTER SESSION SET optimizer_dynamic_sampling = 0")
+        except Exception:
+            pass  # 권한 없는 환경에서도 무시하고 계속 진행
 
-        # ── EXPLAIN PLAN 직접 실행 ────────────────────────────────────────────
+        # Oracle 12c+ adaptive statistics 도 비활성화
+        try:
+            cursor.execute("ALTER SESSION SET optimizer_adaptive_statistics = FALSE")
+        except Exception:
+            pass
+
+        # ── EXPLAIN PLAN 직접 실행 ───────────────────────────────────────────
         # Oracle 공식 권장 방식: cursor.execute("EXPLAIN PLAN ... FOR {sql}")
-        # ─ EXPLAIN PLAN 은 Oracle 이 SELECT 를 절대 실행하지 않음을 보장
-        # ─ EXECUTE IMMEDIATE 래핑 불가: Oracle 문서상 EXPLAIN PLAN 은
-        #   EXECUTE IMMEDIATE 의 지원 대상이 아니며, 래핑 시 내부 SQL 이
-        #   실제로 실행될 수 있음
+        # EXPLAIN PLAN 은 SELECT 를 실행하지 않고 실행 계획만 생성해 PLAN_TABLE 에 저장.
         #
-        # 바인드 변수 처리:
-        #  use_bind_vars=True  → converted_sql 에 :v1 등 존재
-        #                        None 값으로 바인드 → Oracle 이 통계 기반 플랜 생성
-        #                        (바인드 변수 피킹 없이 일반 플랜 — 운영 환경 대표값)
-        #  use_bind_vars=False → 원본 SQL(리터럴 포함), 바인드 변수 없음
-
+        # use_bind_vars=True  → converted_sql 의 :v1 에 None(NULL) 바인드
+        # use_bind_vars=False → 원본 SQL(리터럴 포함), 바인드 변수 없음
         explain_stmt = f"EXPLAIN PLAN SET STATEMENT_ID = '{stmt_id}' FOR {converted_sql}"
 
         if use_bind_vars and bind_map:
-            # :v1, :v2 … 에 대해 None(NULL) 을 전달해 oracledb 가 정상 바인딩하도록 함
             bind_params = {k.lstrip(':'): None for k in bind_map.keys()}
             cursor.execute(explain_stmt, bind_params)
         else:
             cursor.execute(explain_stmt)
 
-        # DBMS_XPLAN.DISPLAY 로 실행계획 조회 (stmt_id 명시해 해당 플랜만 조회)
+        # ── DBMS_XPLAN.DISPLAY 로 실행계획 조회 ──────────────────────────────
         cursor.execute(
             "SELECT PLAN_TABLE_OUTPUT "
             "FROM TABLE(DBMS_XPLAN.DISPLAY('PLAN_TABLE', :sid, 'serial'))",
@@ -159,10 +167,20 @@ def explain_plan(connection, sql: str, db_id: int, db_label: str,
         result.plan_steps = parse_plan_steps(plan_text)
         result.success = True
 
-        cursor.close()
     except Exception as e:
         result.error = str(e)
         result.success = False
+
+    finally:
+        # Dynamic Sampling 설정 원복 (세션 재사용 대비)
+        try:
+            cursor.execute("ALTER SESSION SET optimizer_dynamic_sampling = 2")
+        except Exception:
+            pass
+        try:
+            cursor.close()
+        except Exception:
+            pass
 
     return result
 
